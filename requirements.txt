@@ -1,0 +1,16 @@
+modelscope
+numpy
+packaging
+addict
+datasets==2.16.0
+oss2
+torch
+pillow
+simplejson
+sortedcontainers
+opencv-python
+mmcv==1.4.2
+mmcls
+torchvision
+einops
+opencv-python-headless
