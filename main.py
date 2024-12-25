@@ -44,7 +44,7 @@ def bin_init():
     with open('bins_state.json', 'r', encoding='utf-8') as f:
         _bins_state = json.loads(f.read())
         if _bins_state['id'] is None:
-            _bins_state['id'] = uuid.uuid4().int
+            _bins_state['id'] = str(uuid.uuid4().int)
             payload = {
                 "id": _bins_state['id'],
                 "name": _bins_state['name'],
