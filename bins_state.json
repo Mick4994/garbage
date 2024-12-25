@@ -1,0 +1,20 @@
+{
+  "count": {
+    "recyclable_waste": 0,
+    "kitchen_waste": 0,
+    "hazardous_waste": 0,
+    "other_waste": 0
+  },
+  "health": {
+    "recyclable_waste": 0,
+    "kitchen_waste": 0,
+    "hazardous_waste": 0,
+    "other_waste": 0
+  },
+  "humidity": "50%",
+  "id": 284684084293330984652733449402404686137,
+  "latitude": 22.706647,
+  "longitude": 114.406652,
+  "name": "hugelee-A",
+  "temperature": "15.0"
+}

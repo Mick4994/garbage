@@ -1,6 +1,7 @@
 import cv2
 import time
 import json
+import uuid
 import serial
 import requests
 import threading
@@ -8,30 +9,57 @@ from playsound import playsound
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
 
-DEVICE_ID = 1
-DISPLAY_MODE = True
-backbone_url = 'http://localhost'
+# 终端垃圾站运行参数
+backbone_url = 'http://106.52.164.17:5000/api'
 TRY_TIME = 3
-CAMERA_INDEX = 0
-CONFIDENCE = 0.5
+
 COM_PORT = 'COM1'
 BAUDRATE = 115200
+
+DISPLAY_MODE = False
+CAMERA_INDEX = 0
+CONFIDENCE = 0.5
 MODEL_PATH = 'damo/cv_convnext-base_image-classification_garbage'
 
-bins_state = {
-    'health': {
-        'recyclable_waste': 0,
-        'kitchen_waste': 0,
-        'hazardous_waste': 0,
-        'other_waste': 0
-    },
-    'count': {
-        'recyclable_waste': 0,
-        'kitchen_waste': 0,
-        'hazardous_waste': 0,
-        'other_waste': 0
-    }
-}
+
+def request_backbone(method, url, payload={}):
+    def requests_request(_method, _url, _payload):
+        try:
+            requests.request(method=_method, url=_url, data=_payload)
+        except:
+            print("Error: backbone disconnected")
+
+    threading.Thread(target=requests_request, args=(method, url, payload, )).start()
+
+
+def update_bins_state(**update_state):
+    with open('bins_state.json', 'w', encoding='utf-8') as f:
+        for key, value in update_state.items():
+            bins_state[key] = value
+        f.write(json.dumps(bins_state))
+    print(f'write to bins_state: {update_state}')
+
+
+def bin_init():
+    with open('bins_state.json', 'r', encoding='utf-8') as f:
+        _bins_state = json.loads(f.read())
+        if _bins_state['id'] is None:
+            _bins_state['id'] = uuid.uuid4().int
+            payload = {
+                "id": _bins_state['id'],
+                "name": _bins_state['name'],
+                "longitude": _bins_state['longitude'],
+                "latitude": _bins_state['latitude'],
+                "temperature": _bins_state['temperature'],
+                "humidity": _bins_state['humidity'],
+                "status": "active"
+            }
+            update_bins_state(payload)
+            request_backbone("POST", backbone_url+"/create", payload)
+    return _bins_state
+
+
+bins_state = bin_init()
 
 name_map = {
     '可回收物': 'recyclable_waste',
@@ -54,15 +82,6 @@ if DISPLAY_MODE:
     cap = cv2.VideoCapture(CAMERA_INDEX)
     frame = None
     res = []
-
-def request_backbone(url):
-    def requests_get(get_url):
-        try:
-            requests.get(get_url)
-        except:
-            print("Error: backbone disconnected")
-
-    threading.Thread(target=requests_get, args=(url,)).start()
 
 
 def get_garbage_classify_result():
@@ -101,8 +120,14 @@ def get_garbage_classify_result():
 
 def process_serial_data(serial_data: dict):
     if serial_data['type'] == 'health':
-        for trash_type, health in serial_data['data'].items():
-            bins_state[trash_type] = health
+        payload = {
+            "id": bins_state["id"],
+            "temperature": serial_data['data']['temperature'],
+            "humidity": serial_data['data']['humidity']
+        }
+        update_bins_state(payload)
+        request_backbone("POST", url=backbone_url + f'/update', payload=payload)
+
         return
 
     if serial_data['type'] == 'income':
@@ -114,65 +139,71 @@ def process_serial_data(serial_data: dict):
 
         if bins_state['count'][trash_type] > 5:
             playsound(f'tts/full/{trash_type}.wav')
-            request_backbone(url=backbone_url + f'/full/{DEVICE_ID}/{trash_type}')
+            payload = {
+                "id": bins_state["id"],
+                "status": "inactive"
+            }
+            update_bins_state(payload)
+            request_backbone("POST", url=backbone_url + f'/update', payload=payload)
             return
 
         bins_state['count'][trash_type] += 1
-        request_backbone(url=backbone_url + f'/update/{DEVICE_ID}/{trash_type}')
         return index_map[trash_type]
 
     if serial_data['type'] == 'clean':
         for trash_type in bins_state['health']:
             bins_state['health'][trash_type] = 0
-        request_backbone(url=backbone_url + f'/clean/{DEVICE_ID}')
 
 
 if __name__ == "__main__":
+    try:
+        with serial.Serial(port=COM_PORT, baudrate=BAUDRATE) as ser:
+            print(f'connect to {COM_PORT}')
 
-    with serial.Serial(port=COM_PORT, baudrate=BAUDRATE) as ser:
-        print(f'connect to {COM_PORT}')
-
-        last_time = time.time()
-
-        buffer = ''
-
-        while True:
-            now_time = time.time()
-            if now_time - last_time > 3:
-                print(bins_state)
-                last_time = now_time
-
-            if DISPLAY_MODE:
-                _, frame = cap.read()
-                cv2.imshow('frame', frame)
-                if ord('z') == cv2.waitKey(1):
-                    threading.Thread(target=get_garbage_classify_result).start()
-
-                if res:
-                    try:
-                        trash_type = name_map[res[-1]]
-                        threading.Thread(target=playsound, args=(f'tts/tip/{trash_type}.wav',)).start()
-                        res.clear()
-                    except:
-                        pass
-
-            while ser.in_waiting:
-                buffer += ser.read(ser.in_waiting or 1).decode('utf-8')
-
-            if not buffer:
-                continue
-
-            try:
-                # 尝试解析完整的 JSON 对象
-                json_data = json.loads(buffer)
-            except json.JSONDecodeError:
-                # 如果解析失败，继续读取直到缓冲区包含完整的 JSON
-                print(f"receive not json data:\n{buffer}")
-                continue
-
-            proc_res = process_serial_data(json_data)
-            if proc_res:
-                ser.write(proc_res.encode('utf-8'))
+            last_time = time.time()
 
             buffer = ''
+
+            while True:
+                now_time = time.time()
+                if now_time - last_time > 3:
+                    print(bins_state)
+                    last_time = now_time
+
+                if DISPLAY_MODE:
+                    _, frame = cap.read()
+                    cv2.imshow('frame', frame)
+                    if ord('z') == cv2.waitKey(1):
+                        threading.Thread(target=get_garbage_classify_result).start()
+
+                    if res:
+                        try:
+                            trash_type = name_map[res[-1]]
+                            threading.Thread(target=playsound, args=(f'tts/tip/{trash_type}.wav',)).start()
+                            res.clear()
+                        except:
+                            pass
+
+                while ser.in_waiting:
+                    buffer += ser.read(ser.in_waiting or 1).decode('utf-8')
+
+                if not buffer:
+                    continue
+
+                try:
+                    # 尝试解析完整的 JSON 对象
+                    json_data = json.loads(buffer)
+                except json.JSONDecodeError:
+                    # 如果解析失败，继续读取直到缓冲区包含完整的 JSON
+                    print(f"receive not json data:\n{buffer}")
+                    continue
+
+                proc_res = process_serial_data(json_data)
+                if proc_res:
+                    ser.write(proc_res.encode('utf-8'))
+
+                buffer = ''
+
+    except:
+        update_bins_state()
 
